@@ -5,11 +5,11 @@ ComfyUI API Client - Submit workflows and monitor generation progress
 
 import argparse
 import json
-import os
 import sys
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 import uuid
 from pathlib import Path
 
@@ -80,33 +80,37 @@ class ComfyUIClient:
             return None
 
         boundary = uuid.uuid4().hex
-        lines = []
-
-        lines.append(f"--{boundary}")
-        lines.append(f'Content-Disposition: form-data; name="image"; filename="{filepath.name}"')
-        lines.append("Content-Type: application/octet-stream")
-        lines.append("")
-        lines.append("")
-
-        lines.append(f"--{boundary}")
-        lines.append(f'Content-Disposition: form-data; name="subfolder"')
-        lines.append("")
-        lines.append(subfolder)
-
-        lines.append(f"--{boundary}")
-        lines.append(f'Content-Disposition: form-data; name="overwrite"')
-        lines.append("")
-        lines.append(str(overwrite).lower())
-
-        lines.append(f"--{boundary}--")
-
-        header_part = "\r\n".join(lines[:-1]) + "\r\n\r\n"
-        footer_part = "\r\n" + lines[-1]
-
         with open(filepath, "rb") as f:
             image_data = f.read()
 
-        body = header_part.encode("utf-8") + image_data + footer_part.encode("utf-8")
+        fields = [
+            (
+                "image",
+                filepath.name,
+                "application/octet-stream",
+                image_data,
+            ),
+        ]
+        form_values = {
+            "subfolder": subfolder,
+            "overwrite": str(overwrite).lower(),
+        }
+        body_parts = []
+        for name, filename, content_type, value in fields:
+            body_parts.append(f"--{boundary}\r\n".encode("utf-8"))
+            body_parts.append(
+                f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'.encode("utf-8")
+            )
+            body_parts.append(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
+            body_parts.append(value)
+            body_parts.append(b"\r\n")
+        for name, value in form_values.items():
+            body_parts.append(f"--{boundary}\r\n".encode("utf-8"))
+            body_parts.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+            body_parts.append(str(value).encode("utf-8"))
+            body_parts.append(b"\r\n")
+        body_parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+        body = b"".join(body_parts)
 
         req = urllib.request.Request(
             url,
@@ -123,7 +127,12 @@ class ComfyUIClient:
             return None
 
     def get_image(self, filename, subfolder="", img_type="output"):
-        url = f"{self.api_url}/view?filename={urllib.parse.quote(filename)}&subfolder={urllib.parse.quote(subfolder)}&type={img_type}"
+        query = urllib.parse.urlencode({
+            "filename": filename,
+            "subfolder": subfolder,
+            "type": img_type,
+        })
+        url = f"{self.api_url}/view?{query}"
         try:
             with urllib.request.urlopen(url, timeout=30) as resp:
                 return resp.read()
@@ -247,9 +256,9 @@ def fill_workflow(workflow, model_name, positive_prompt, negative_prompt,
                 inputs["ckpt_name"] = model_name
 
         elif class_type == "CLIPTextEncode":
-            if node_id in positive_node_ids:
+            if positive_prompt is not None and node_id in positive_node_ids:
                 inputs["text"] = positive_prompt
-            elif node_id in negative_node_ids:
+            elif negative_prompt is not None and node_id in negative_node_ids:
                 inputs["text"] = negative_prompt
 
         elif class_type == "KSampler":
@@ -332,8 +341,8 @@ def main():
             workflow = fill_workflow(
                 workflow,
                 model_name=args.model,
-                positive_prompt=args.positive or "",
-                negative_prompt=args.negative or "",
+                positive_prompt=args.positive,
+                negative_prompt=args.negative,
                 seed=args.seed,
                 steps=args.steps,
                 cfg=args.cfg,

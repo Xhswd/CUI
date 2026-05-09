@@ -76,7 +76,7 @@ def resolve_model_input(model_input):
         parts = model_input.split("/")
         if len(parts) >= 2:
             repo = "/".join(parts[:2])
-            filename = parts[2] if len(parts) > 2 else None
+            filename = "/".join(parts[2:]) if len(parts) > 2 else None
             return repo, filename, "checkpoint"
 
     if model_input.endswith((".safetensors", ".ckpt", ".pt", ".pth", ".bin")):
