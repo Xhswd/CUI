@@ -104,6 +104,19 @@ LORA_SEARCH_KEYWORDS = {
 }
 
 
+def safe_output_path(output_dir, filename):
+    """Join output_dir and a remote filename without allowing path traversal."""
+    filename_path = Path(filename)
+    if filename_path.is_absolute() or ".." in filename_path.parts:
+        raise ValueError(f"Unsafe filename outside output directory: {filename}")
+
+    base = Path(output_dir).resolve()
+    candidate = (base / filename_path).resolve()
+    if candidate != base and base not in candidate.parents:
+        raise ValueError(f"Unsafe filename outside output directory: {filename}")
+    return candidate
+
+
 def list_local_loras(comfyui_path):
     """List locally installed LoRA models."""
     lora_dir = Path(comfyui_path) / "models" / "loras"
@@ -201,6 +214,11 @@ def download_lora(repo, filename=None, output_dir=None, mirror="hf-mirror"):
                 return False
 
         print(f"Downloading LoRA: {repo}/{filename}")
+        try:
+            out_path = safe_output_path(output_dir, filename)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return False
 
         # Try huggingface-cli first
         env = os.environ.copy()
@@ -211,14 +229,14 @@ def download_lora(repo, filename=None, output_dir=None, mirror="hf-mirror"):
         try:
             result = subprocess.run(cmd, env=env, check=False)
             if result.returncode == 0:
-                print(f"Download complete: {output_dir / filename}")
+                print(f"Download complete: {out_path}")
                 return True
         except FileNotFoundError:
             pass
 
         # Fallback to wget/curl
         download_url = f"{mirror_url}/{repo}/resolve/main/{filename}"
-        out_path = output_dir / filename
+        out_path.parent.mkdir(parents=True, exist_ok=True)
 
         for tool, cmd_base in [
             ("wget", ["wget", "-c", "-q", "--show-progress", download_url, "-O", str(out_path)]),

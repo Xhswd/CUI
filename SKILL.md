@@ -44,32 +44,39 @@ You are a ComfyUI Assistant. When this skill is invoked, you must follow the wor
 
 ### Step 2: Model Selection
 
-1. List installed checkpoint models, filtering placeholder files:
+1. Ask the user to choose an image type before showing models:
+   - Common options: "二次元/动漫", "写实/照片", "动物/宠物", "景色/自然"
+   - Additional supported types: "电商商品", "人像/模特", "建筑/室内", "快速预览"
+   - The final option must be "Other" so the user can type any custom image type.
+   - If the TUI has an option limit, split into pages, but never show model choices before the image type is known.
+
+2. Run type-aware local filtering and recommendation:
    ```bash
-   ls -1 {comfyui_path}/models/checkpoints/ 2>/dev/null | grep -iE '\.(safetensors|ckpt|pt|pth|bin)$'
+   python3 {skill_dir}/scripts/model_presets.py recommend-type \
+     --image-type "{image_type}" \
+     --comfyui-path "{comfyui_path}" \
+     --family any \
+     --json
    ```
-   Also list LoRA models:
+
+3. Present model choices using only `local_checkpoints` returned by the command:
+   - Do not list unrelated local models. For example, when the selected type is 写实, do not display anime-only checkpoints such as Anything-style models unless the script returned them.
+   - If `local_checkpoints` is non-empty, show those local matches first and do not search/download unless the user explicitly asks.
+   - If there are curated `recommended_combos`, show the checkpoint + LoRA + VAE + ControlNet parts as a recommended combo and ask whether to use/download missing parts.
+
+4. If the user typed "Other" and no local match is found, search online before suggesting downloads:
    ```bash
-   ls -1 {comfyui_path}/models/loras/ 2>/dev/null | grep -iE '\.(safetensors|ckpt|pt|pth|bin)$'
+   python3 {skill_dir}/scripts/model_presets.py recommend-type \
+     --image-type "{custom_image_type}" \
+     --comfyui-path "{comfyui_path}" \
+     --search-if-missing \
+     --mirror hf-mirror \
+     --json
    ```
+   - Show the returned model names and ask whether to download one.
+   - If search returns nothing, ask the user to enter a specific HuggingFace model ID.
 
-2. Use **AskUserQuestion** to present model choices:
-   - If models found: show up to 3 model names + "📋 推荐模型" + "📥 下载新模型" (max 4 options)
-   - If more than 3 models: show first 3 + "📥 更多/下载"，选择后列出剩余
-   - If no models: show "📋 推荐模型" + "📥 从HuggingFace下载新模型"
-   - Header: "选择模型"
-   - Question: "请选择要使用的模型："
-
-3. If user selects "推荐模型":
-   a. Ask for use case using AskUserQuestion:
-      - Options: "🛒 电商" / "🎨 动漫" / "📸 写实" / "⚡ 快速"
-   b. Show recommended combo:
-      ```bash
-      python3 {skill_dir}/scripts/model_presets.py recommend --task {task_type} --family sdxl
-      ```
-   c. Offer to download missing models from the combo.
-
-4. If user selects download option:
+5. If user selects download option:
    a. Ask the user for the model repo/name using AskUserQuestion (with "Other" free text input):
       - Question: "请输入HuggingFace模型ID或快捷名：\n\n快捷名：sdxl-base, sd15, flux-dev 等\n完整ID：stabilityai/stable-diffusion-xl-base-1.0"
    b. Run the download script:
@@ -78,12 +85,12 @@ You are a ComfyUI Assistant. When this skill is invoked, you must follow the wor
       ```
    c. Wait for download to complete, then confirm with user.
 
-5. After selecting checkpoint, ask if user wants to add LoRA:
+6. After selecting checkpoint, ask if user wants to add LoRA:
    - List installed LoRAs: `python3 {skill_dir}/scripts/lora_manager.py list --comfyui-path {comfyui_path}`
    - Show presets: `python3 {skill_dir}/scripts/lora_manager.py presets --type {family}`
    - Options: select LoRA / skip LoRA
 
-6. Record the selected model name (and optional LoRA) for workflow construction.
+7. Record the selected model name and optional LoRA/VAE/ControlNet for workflow construction.
 
 ### Step 3: Function Selection
 
@@ -188,6 +195,9 @@ Record the selected e-commerce scene for prompt generation.
      ```bash
      python3 {skill_dir}/scripts/comfyui_client.py upload --image {image_path}
      ```
+   - Use the returned filename as `--input-image`
+   - For inpainting, also ask for a mask image and pass it as `--mask-image`
+   - For ControlNet/tryon workflows, pass the selected ControlNet model as `--controlnet`
 
 ### Step 5: Prompt Generation
 
@@ -231,6 +241,11 @@ Record the selected e-commerce scene for prompt generation.
    ```bash
    python3 {skill_dir}/scripts/comfyui_client.py submit --workflow {workflow_path} --model "{model}" --positive "{positive}" --negative "{negative}" --wait --timeout 600
    ```
+   Add workflow-specific arguments when needed:
+   - LoRA: `--lora "{lora_name}" --lora-strength-model 0.8 --lora-strength-clip 0.8`
+   - Image input: `--input-image "{uploaded_filename}"`
+   - Inpainting mask: `--mask-image "{uploaded_mask_filename}"`
+   - ControlNet: `--controlnet "{controlnet_model}"`
 3. Monitor the generation progress (the --wait flag handles this automatically)
 4. Once complete, report the output image path to the user.
 5. Ask if the user wants to (max 4 options):

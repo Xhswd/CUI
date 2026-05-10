@@ -369,6 +369,31 @@ ComfyUI/
 
 ## 8. Model Presets & Recommendations
 
+### Type-Aware Recommendation Rule
+
+Always ask for the target image type before showing model choices. Local model lists must be filtered by image type:
+
+```bash
+python3 {skill_dir}/scripts/model_presets.py recommend-type \
+  --image-type "{image_type}" \
+  --comfyui-path "{comfyui_path}" \
+  --family any \
+  --json
+```
+
+Only display models returned in `local_checkpoints`; do not show unrelated local checkpoints just because they exist. If no local match is found for a custom "Other" type, search online:
+
+```bash
+python3 {skill_dir}/scripts/model_presets.py recommend-type \
+  --image-type "{custom_image_type}" \
+  --comfyui-path "{comfyui_path}" \
+  --search-if-missing \
+  --mirror hf-mirror \
+  --json
+```
+
+Use `recommended_combos` to ask whether the user wants the checkpoint + LoRA + VAE + ControlNet combination. Download only after asking.
+
 ### Recommended Checkpoint Models
 
 | Model | Family | Best For | Resolution | Steps | CFG | Sampler |
@@ -470,8 +495,9 @@ Use `workflows/txt2img_lora.json` which includes a `LoraLoader` node (node 10).
 - **Batch Process** (`batch`): Apply any operation to all images in a directory
 
 ### Dependencies
-- Required: `pip install Pillow`
-- Optional (for bg removal): `pip install rembg`
+- Install the full helper dependency set from this repo: `pip install -r requirements.txt`
+- Minimum for non-background image operations: `pip install Pillow`
+- Background removal requires: `pip install rembg`
 
 ## 11. History Management
 

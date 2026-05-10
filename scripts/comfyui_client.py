@@ -229,23 +229,69 @@ class ComfyUIClient:
         return {"status": "unknown"}
 
 
+PLACEHOLDER_TOKEN = "PLACEHOLDER"
+
+
+def find_placeholders(workflow):
+    """Return unresolved placeholder strings with their JSON paths."""
+    placeholders = []
+
+    def walk(value, path):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                walk(child, f"{path}.{key}" if path else str(key))
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, f"{path}[{index}]")
+        elif isinstance(value, str) and PLACEHOLDER_TOKEN in value:
+            placeholders.append((path, value))
+
+    walk(workflow, "")
+    return placeholders
+
+
+def _collect_clip_text_nodes(workflow, source_node_id, seen=None):
+    """Trace upstream from a conditioning input and find CLIPTextEncode nodes."""
+    if seen is None:
+        seen = set()
+
+    source_node_id = str(source_node_id)
+    if source_node_id in seen:
+        return set()
+    seen.add(source_node_id)
+
+    node = workflow.get(source_node_id)
+    if not isinstance(node, dict):
+        return set()
+    if node.get("class_type") == "CLIPTextEncode":
+        return {source_node_id}
+
+    found = set()
+    for value in node.get("inputs", {}).values():
+        if isinstance(value, list) and value and str(value[0]) in workflow:
+            found.update(_collect_clip_text_nodes(workflow, value[0], seen))
+    return found
+
+
 def fill_workflow(workflow, model_name, positive_prompt, negative_prompt,
                   seed=None, steps=None, cfg=None, width=None, height=None,
-                  sampler=None, scheduler=None, input_image=None):
+                  sampler=None, scheduler=None, input_image=None,
+                  mask_image=None, lora_name=None, lora_strength_model=None,
+                  lora_strength_clip=None, controlnet_model=None, denoise=None):
     result = json.loads(json.dumps(workflow))
 
-    # Build a map of which CLIPTextEncode nodes are positive/negative
-    # by tracing KSampler's positive/negative input connections
+    # Build a map of which CLIPTextEncode nodes are positive/negative by
+    # tracing KSampler conditioning links. This also handles ControlNet wrappers.
     positive_node_ids = set()
     negative_node_ids = set()
     for node_id, node in result.items():
         if node.get("class_type") == "KSampler":
             pos_input = node.get("inputs", {}).get("positive", [])
             if isinstance(pos_input, list) and len(pos_input) > 0:
-                positive_node_ids.add(str(pos_input[0]))
+                positive_node_ids.update(_collect_clip_text_nodes(result, pos_input[0]))
             neg_input = node.get("inputs", {}).get("negative", [])
             if isinstance(neg_input, list) and len(neg_input) > 0:
-                negative_node_ids.add(str(neg_input[0]))
+                negative_node_ids.update(_collect_clip_text_nodes(result, neg_input[0]))
 
     for node_id, node in result.items():
         class_type = node.get("class_type", "")
@@ -256,9 +302,14 @@ def fill_workflow(workflow, model_name, positive_prompt, negative_prompt,
                 inputs["ckpt_name"] = model_name
 
         elif class_type == "CLIPTextEncode":
-            if positive_prompt is not None and node_id in positive_node_ids:
+            text = inputs.get("text")
+            if positive_prompt is not None and (
+                text == "POSITIVE_PLACEHOLDER" or node_id in positive_node_ids
+            ):
                 inputs["text"] = positive_prompt
-            elif negative_prompt is not None and node_id in negative_node_ids:
+            elif negative_prompt is not None and (
+                text == "NEGATIVE_PLACEHOLDER" or node_id in negative_node_ids
+            ):
                 inputs["text"] = negative_prompt
 
         elif class_type == "KSampler":
@@ -272,6 +323,8 @@ def fill_workflow(workflow, model_name, positive_prompt, negative_prompt,
                 inputs["sampler_name"] = sampler
             if scheduler is not None:
                 inputs["scheduler"] = scheduler
+            if denoise is not None:
+                inputs["denoise"] = denoise
 
         elif class_type == "EmptyLatentImage":
             if width is not None:
@@ -282,6 +335,22 @@ def fill_workflow(workflow, model_name, positive_prompt, negative_prompt,
         elif class_type in ("LoadImage",):
             if input_image:
                 inputs["image"] = input_image
+
+        elif class_type == "LoadImageMask":
+            if mask_image:
+                inputs["image"] = mask_image
+
+        elif class_type == "LoraLoader":
+            if lora_name:
+                inputs["lora_name"] = lora_name
+            if lora_strength_model is not None:
+                inputs["strength_model"] = lora_strength_model
+            if lora_strength_clip is not None:
+                inputs["strength_clip"] = lora_strength_clip
+
+        elif class_type == "ControlNetLoader":
+            if controlnet_model:
+                inputs["control_net_name"] = controlnet_model
 
     return result
 
@@ -305,7 +374,13 @@ def main():
     submit_parser.add_argument("--height", type=int, help="Image height")
     submit_parser.add_argument("--sampler", help="Sampler name")
     submit_parser.add_argument("--scheduler", help="Scheduler name")
+    submit_parser.add_argument("--denoise", type=float, help="Denoise strength")
     submit_parser.add_argument("--input-image", help="Input image filename")
+    submit_parser.add_argument("--mask-image", help="Mask image filename for inpainting workflows")
+    submit_parser.add_argument("--lora", help="LoRA model name")
+    submit_parser.add_argument("--lora-strength-model", type=float, help="LoRA model strength")
+    submit_parser.add_argument("--lora-strength-clip", type=float, help="LoRA CLIP strength")
+    submit_parser.add_argument("--controlnet", help="ControlNet model name")
     submit_parser.add_argument("--wait", action="store_true", help="Wait for completion")
     submit_parser.add_argument("--timeout", type=int, default=600, help="Wait timeout in seconds")
 
@@ -336,22 +411,33 @@ def main():
         with open(args.workflow, "r", encoding="utf-8") as f:
             workflow = json.load(f)
 
-        if any([args.model, args.positive, args.negative, args.seed, args.steps,
-                args.cfg, args.width, args.height, args.sampler, args.scheduler, args.input_image]):
-            workflow = fill_workflow(
-                workflow,
-                model_name=args.model,
-                positive_prompt=args.positive,
-                negative_prompt=args.negative,
-                seed=args.seed,
-                steps=args.steps,
-                cfg=args.cfg,
-                width=args.width,
-                height=args.height,
-                sampler=args.sampler,
-                scheduler=args.scheduler,
-                input_image=args.input_image,
-            )
+        workflow = fill_workflow(
+            workflow,
+            model_name=args.model,
+            positive_prompt=args.positive,
+            negative_prompt=args.negative,
+            seed=args.seed,
+            steps=args.steps,
+            cfg=args.cfg,
+            width=args.width,
+            height=args.height,
+            sampler=args.sampler,
+            scheduler=args.scheduler,
+            input_image=args.input_image,
+            mask_image=args.mask_image,
+            lora_name=args.lora,
+            lora_strength_model=args.lora_strength_model,
+            lora_strength_clip=args.lora_strength_clip,
+            controlnet_model=args.controlnet,
+            denoise=args.denoise,
+        )
+
+        placeholders = find_placeholders(workflow)
+        if placeholders:
+            print("Unresolved workflow placeholders:", file=sys.stderr)
+            for path, value in placeholders:
+                print(f"  {path}: {value}", file=sys.stderr)
+            sys.exit(1)
 
         prompt_id = client.submit_workflow(workflow)
         if prompt_id:

@@ -34,10 +34,16 @@ def save_db(db, db_path):
         json.dump(db, f, indent=2, ensure_ascii=False)
 
 
+def next_record_id(db):
+    """Return a stable new ID even after records have been deleted."""
+    existing_ids = [r.get("id", 0) for r in db.get("records", []) if isinstance(r.get("id"), int)]
+    return max(existing_ids, default=0) + 1
+
+
 def add_record(db, record):
     """Add a generation record to history."""
     entry = {
-        "id": len(db["records"]) + 1,
+        "id": record.get("id") or next_record_id(db),
         "timestamp": datetime.now().isoformat(),
         "prompt_id": record.get("prompt_id", ""),
         "model": record.get("model", ""),
@@ -49,9 +55,9 @@ def add_record(db, record):
         "images": record.get("images", []),
         "params": record.get("params", {}),
         "tags": record.get("tags", []),
-        "favorite": False,
-        "rating": 0,
-        "notes": "",
+        "favorite": bool(record.get("favorite", False)),
+        "rating": record.get("rating", 0),
+        "notes": record.get("notes", ""),
     }
     db["records"].append(entry)
     return entry

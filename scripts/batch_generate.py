@@ -13,7 +13,7 @@ from pathlib import Path
 
 # Add parent scripts dir to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
-from comfyui_client import ComfyUIClient, fill_workflow
+from comfyui_client import ComfyUIClient, fill_workflow, find_placeholders
 from generate_prompts import generate_prompts, ECOMMERCE_SCENE_TEMPLATES
 
 # --- Batch variant definitions ---
@@ -98,7 +98,10 @@ def generate_batch_variants(base_subject, batch_type, variants=None):
 
 
 def run_batch(client, workflow, variants, model_name, output_dir, timeout=600,
-              steps=None, cfg=None, width=None, height=None, sampler=None, scheduler=None):
+              steps=None, cfg=None, width=None, height=None, sampler=None,
+              scheduler=None, input_image=None, mask_image=None, lora_name=None,
+              lora_strength_model=None, lora_strength_clip=None,
+              controlnet_model=None, denoise=None):
     """Submit batch jobs and collect results."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -137,12 +140,32 @@ def run_batch(client, workflow, variants, model_name, output_dir, timeout=600,
             height=height,
             sampler=sampler,
             scheduler=scheduler,
+            input_image=input_image,
+            mask_image=mask_image,
+            lora_name=lora_name,
+            lora_strength_model=lora_strength_model,
+            lora_strength_clip=lora_strength_clip,
+            controlnet_model=controlnet_model,
+            denoise=denoise,
         )
 
         # Set unique filename prefix
         for node_id, node in filled.items():
             if node.get("class_type") == "SaveImage":
                 node["inputs"]["filename_prefix"] = f"batch/{variant_name}"
+
+        placeholders = find_placeholders(filled)
+        if placeholders:
+            print(f"  FAILED: Unresolved placeholders for {variant_name}", file=sys.stderr)
+            for path, value in placeholders:
+                print(f"    {path}: {value}", file=sys.stderr)
+            results.append({
+                "variant": variant_name,
+                "status": "failed",
+                "error": "unresolved_placeholders",
+                "placeholders": [{"path": path, "value": value} for path, value in placeholders],
+            })
+            continue
 
         # Submit
         prompt_id = client.submit_workflow(filled)
@@ -202,6 +225,13 @@ def main():
     parser.add_argument("--height", type=int, help="Image height")
     parser.add_argument("--sampler", help="Sampler name")
     parser.add_argument("--scheduler", help="Scheduler name")
+    parser.add_argument("--denoise", type=float, help="Denoise strength")
+    parser.add_argument("--input-image", help="Input image filename")
+    parser.add_argument("--mask-image", help="Mask image filename for inpainting workflows")
+    parser.add_argument("--lora", help="LoRA model name")
+    parser.add_argument("--lora-strength-model", type=float, help="LoRA model strength")
+    parser.add_argument("--lora-strength-clip", type=float, help="LoRA CLIP strength")
+    parser.add_argument("--controlnet", help="ControlNet model name")
     parser.add_argument("--timeout", type=int, default=600, help="Per-image timeout in seconds")
     parser.add_argument("--output", default=None, help="Output directory (default: ComfyUI output)")
     parser.add_argument("--dry-run", action="store_true", help="Show variants without submitting")
@@ -258,6 +288,13 @@ def main():
         height=args.height,
         sampler=args.sampler,
         scheduler=args.scheduler,
+        input_image=args.input_image,
+        mask_image=args.mask_image,
+        lora_name=args.lora,
+        lora_strength_model=args.lora_strength_model,
+        lora_strength_clip=args.lora_strength_clip,
+        controlnet_model=args.controlnet,
+        denoise=args.denoise,
     )
 
     # Summary

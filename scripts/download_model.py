@@ -67,6 +67,19 @@ KNOWN_REPOS = {
 }
 
 
+def safe_output_path(output_dir, filename):
+    """Join output_dir and a remote filename without allowing path traversal."""
+    filename_path = Path(filename)
+    if filename_path.is_absolute() or ".." in filename_path.parts:
+        raise ValueError(f"Unsafe filename outside output directory: {filename}")
+
+    base = Path(output_dir).resolve()
+    candidate = (base / filename_path).resolve()
+    if candidate != base and base not in candidate.parents:
+        raise ValueError(f"Unsafe filename outside output directory: {filename}")
+    return candidate
+
+
 def resolve_model_input(model_input):
     if model_input in KNOWN_REPOS:
         info = KNOWN_REPOS[model_input]
@@ -234,7 +247,11 @@ def main():
             # Fallback: download each file
             for fn in filename:
                 download_url = f"{mirror_url}/{repo}/resolve/main/{fn}"
-                out_path = output_dir / fn
+                try:
+                    out_path = safe_output_path(output_dir, fn)
+                except ValueError as e:
+                    print(str(e), file=sys.stderr)
+                    sys.exit(1)
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 print(f"下载: {fn}")
                 if not download_file(download_url, str(out_path)):
@@ -252,7 +269,11 @@ def main():
 
         download_url = f"{mirror_url}/{repo}/resolve/main/{filename}"
         # Preserve subdirectory structure from repo
-        out_path = output_dir / filename
+        try:
+            out_path = safe_output_path(output_dir, filename)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         if download_file(download_url, str(out_path)):

@@ -222,14 +222,24 @@ def add_padding(input_path, output_path, target_ratio="1:1", pad_color="white"):
     img = Image.open(input_path).convert("RGBA")
     w, h = img.size
 
-    # Parse ratio
-    parts = target_ratio.split(":")
-    rw, rh = int(parts[0]), int(parts[1])
-    target_w = int(h * rw / rh)
+    # Parse ratio and expand the canvas in whichever direction is needed.
+    try:
+        parts = target_ratio.split(":")
+        rw, rh = int(parts[0]), int(parts[1])
+        if rw <= 0 or rh <= 0:
+            raise ValueError
+    except (IndexError, ValueError):
+        print(f"Error: invalid ratio '{target_ratio}', expected W:H (e.g. 1:1)", file=sys.stderr)
+        return False
 
-    if target_w <= w:
-        # Image is already wider than target ratio
-        return resize_image(input_path, output_path, width=target_w)
+    target_ratio_value = rw / rh
+    current_ratio = w / h
+    if current_ratio > target_ratio_value:
+        target_w = w
+        target_h = int(round(w / target_ratio_value))
+    else:
+        target_w = int(round(h * target_ratio_value))
+        target_h = h
 
     # Create padded canvas
     color_map = {
@@ -239,24 +249,28 @@ def add_padding(input_path, output_path, target_ratio="1:1", pad_color="white"):
     }
     color = color_map.get(pad_color, (255, 255, 255, 255))
 
-    canvas = Image.new("RGBA", (target_w, h), color)
+    canvas = Image.new("RGBA", (target_w, target_h), color)
     offset_x = (target_w - w) // 2
-    canvas.paste(img, (offset_x, 0), img if img.mode == "RGBA" else None)
+    offset_y = (target_h - h) // 2
+    canvas.paste(img, (offset_x, offset_y), img if img.mode == "RGBA" else None)
 
     out = Path(output_path)
+    if pad_color == "transparent" and out.suffix.lower() in (".jpg", ".jpeg"):
+        out = out.with_suffix(".png")
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    if out.suffix.lower() in (".jpg", ".jpeg") and pad_color != "transparent":
+    if out.suffix.lower() in (".jpg", ".jpeg"):
         canvas = canvas.convert("RGB")
 
     canvas.save(str(out))
-    print(f"Padded: {w}x{h} -> {target_w}x{h} (ratio {target_ratio}, {pad_color})")
+    print(f"Padded: {w}x{h} -> {target_w}x{target_h} (ratio {target_ratio}, {pad_color})")
     print(f"Saved: {out}")
     return True
 
 
 def batch_process(input_dir, output_dir, operation, **kwargs):
     """Apply an operation to all images in a directory."""
+    operation = operation.replace("-", "_")
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
