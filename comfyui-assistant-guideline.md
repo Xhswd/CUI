@@ -366,3 +366,125 @@ ComfyUI/
 | 小红书 | 1080x1440 | 1080xauto | JPG/PNG |
 | Amazon | 1000x1000+ | 1000xauto | JPG/PNG |
 | Shopify | 2048x2048 | 2048xauto | JPG/PNG |
+
+## 8. Model Presets & Recommendations
+
+### Recommended Checkpoint Models
+
+| Model | Family | Best For | Resolution | Steps | CFG | Sampler |
+|-------|--------|----------|------------|-------|-----|---------|
+| SDXL Base 1.0 | SDXL | 通用, 电商, 风景 | 1024x1024 | 25 | 7 | dpmpp_2m/karras |
+| DreamShaper XL Turbo | SDXL | 快速生成, 创意 | 1024x1024 | 8 | 2 | dpmpp_sde/karras |
+| Juggernaut XL v9 | SDXL | 电商, 写实照片 | 1024x1024 | 20 | 4.5 | dpmpp_2m/karras |
+| RealVis XL V4.0 | SDXL | 写实人物, 电商模特 | 1024x1024 | 25 | 7 | dpmpp_2m/karras |
+| SD 1.5 | SD15 | 通用, LoRA兼容 | 512x512 | 25 | 7 | euler_ancestral/normal |
+| DreamShaper 8 | SD15 | 通用, 动漫, 写实 | 512x512 | 25 | 7 | euler_ancestral/normal |
+| ReV Animated | SD15 | 动漫, 插画 | 512x512 | 25 | 7 | euler_ancestral/normal |
+| FLUX.1 Dev | FLUX | 通用, 文字渲染 | 1024x1024 | 20 | 3.5 | euler/simple |
+| FLUX.1 Schnell | FLUX | 极速出图, 批量 | 1024x1024 | 4 | 1 | euler/simple |
+
+### Recommended Model Combos
+
+**电商商品图:**
+- SDXL: Juggernaut XL + product-photo-xl LoRA (strength 0.7) + SDXL VAE
+- FLUX: FLUX Dev (no LoRA needed)
+
+**电商模特图:**
+- SDXL: RealVis XL + detail-tweaker-xl LoRA (strength 0.8) + SDXL VAE
+
+**动漫/插画:**
+- SDXL: DreamShaper XL + anime-style-xl LoRA (strength 0.7)
+- SD15: ReV Animated + SD 1.5 VAE
+
+**写实照片:**
+- SDXL: Juggernaut XL + detail-tweaker-xl LoRA (strength 0.8)
+
+**快速生成:**
+- SDXL: DreamShaper XL Turbo (8步) + SDXL VAE FP16
+- FLUX: FLUX Schnell (1-4步)
+
+### Recommended VAE Models
+
+| VAE | Family | Best For |
+|-----|--------|----------|
+| SDXL VAE | SDXL | SDXL通用, 色彩改善 |
+| SDXL VAE FP16 | SDXL | 低显存场景 |
+| SD VAE FT MSE | SD15 | SD1.5通用, 色彩改善 |
+
+### Recommended Upscale Models
+
+| Model | Scale | Best For |
+|-------|-------|----------|
+| 4x UltraSharp | 4x | 通用放大, 细节保留 |
+| Real-ESRGAN x4 | 4x | 真实照片, 老照片修复 |
+| 4x NMKD Superscale | 4x | 高质量放大 |
+| 2x Digital Art | 2x | 插画, 动漫 |
+
+## 9. LoRA Usage Guide
+
+### LoRA Workflow
+Use `workflows/txt2img_lora.json` which includes a `LoraLoader` node (node 10).
+
+### LoRA Loader Node Structure
+```json
+"10": {
+  "class_type": "LoraLoader",
+  "inputs": {
+    "lora_name": "lora_file.safetensors",
+    "strength_model": 0.8,
+    "strength_clip": 0.8,
+    "model": ["4", 0],
+    "clip": ["4", 1]
+  }
+}
+```
+
+### LoRA Strength Guidelines
+| Strength | Effect |
+|----------|--------|
+| 0.3-0.5 | Subtle effect, barely noticeable |
+| 0.5-0.7 | Moderate effect, good for style LoRAs |
+| 0.7-0.9 | Strong effect, recommended for detail LoRAs |
+| 0.9-1.0 | Maximum effect, may cause artifacts |
+
+### Popular LoRA Presets
+
+| Preset | Family | Strength | Best For |
+|--------|--------|----------|----------|
+| detail-tweaker-xl | SDXL | 0.8 | 细节增强, 纹理提升 |
+| add-details-xl | SDXL | 0.6 | 细节, 锐度 |
+| product-photo-xl | SDXL | 0.7 | 电商产品摄影 |
+| anime-style-xl | SDXL | 0.7 | 动漫风格 |
+| oil-painting-xl | SDXL | 0.7 | 油画风格 |
+| flux-realism | FLUX | 0.7 | FLUX写实增强 |
+
+## 10. Image Post-Processing
+
+### Available Operations
+- **Remove Background** (`remove-bg`): Uses rembg for AI-powered background removal, outputs transparent PNG
+- **Resize** (`resize`): Resize with lanczos/bicubic/bilinear/nearest resampling
+- **Format Convert** (`convert`): PNG/JPG/WEBP/BMP/TIFF conversion
+- **Enhance** (`enhance`): Brightness, contrast, saturation, sharpness adjustment + denoise
+- **Crop Square** (`square`): Center/top/bottom crop to 1:1 ratio
+- **Add Padding** (`pad`): Add padding for target ratio (1:1, 4:3, 16:9) with white/black/transparent
+- **Batch Process** (`batch`): Apply any operation to all images in a directory
+
+### Dependencies
+- Required: `pip install Pillow`
+- Optional (for bg removal): `pip install rembg`
+
+## 11. History Management
+
+### Database
+History is stored in `{comfyui_path}/user/history.json` (JSON format).
+
+### Features
+- **List & Search**: Browse history with filters (function, model, tag, favorites, text search)
+- **Favorites**: Star/unstar generations for quick access
+- **Rating**: Rate generations 1-5 stars
+- **Tags**: Add custom tags for organization
+- **Notes**: Add free-text notes to any generation
+- **Compare**: Side-by-side comparison of multiple generations
+- **Statistics**: View generation stats (total count, top models, top functions, date range)
+- **Export**: Export to JSON or CSV format
+- **Import**: Import from ComfyUI output directory

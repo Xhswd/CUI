@@ -54,13 +54,22 @@ You are a ComfyUI Assistant. When this skill is invoked, you must follow the wor
    ```
 
 2. Use **AskUserQuestion** to present model choices:
-   - If models found: show up to 3 model names + "📥 从HuggingFace下载新模型" (max 4 options)
-   - If more than 3 models: show first 3 + "📥 更多模型/下载新模型"，选择"更多"后列出剩余
-   - If no models: only show "📥 从HuggingFace下载新模型"
+   - If models found: show up to 3 model names + "📋 推荐模型" + "📥 下载新模型" (max 4 options)
+   - If more than 3 models: show first 3 + "📥 更多/下载"，选择后列出剩余
+   - If no models: show "📋 推荐模型" + "📥 从HuggingFace下载新模型"
    - Header: "选择模型"
    - Question: "请选择要使用的模型："
 
-3. If user selects download option:
+3. If user selects "推荐模型":
+   a. Ask for use case using AskUserQuestion:
+      - Options: "🛒 电商" / "🎨 动漫" / "📸 写实" / "⚡ 快速"
+   b. Show recommended combo:
+      ```bash
+      python3 {skill_dir}/scripts/model_presets.py recommend --task {task_type} --family sdxl
+      ```
+   c. Offer to download missing models from the combo.
+
+4. If user selects download option:
    a. Ask the user for the model repo/name using AskUserQuestion (with "Other" free text input):
       - Question: "请输入HuggingFace模型ID或快捷名：\n\n快捷名：sdxl-base, sd15, flux-dev 等\n完整ID：stabilityai/stable-diffusion-xl-base-1.0"
    b. Run the download script:
@@ -69,7 +78,12 @@ You are a ComfyUI Assistant. When this skill is invoked, you must follow the wor
       ```
    c. Wait for download to complete, then confirm with user.
 
-4. Record the selected model name for workflow construction.
+5. After selecting checkpoint, ask if user wants to add LoRA:
+   - List installed LoRAs: `python3 {skill_dir}/scripts/lora_manager.py list --comfyui-path {comfyui_path}`
+   - Show presets: `python3 {skill_dir}/scripts/lora_manager.py presets --type {family}`
+   - Options: select LoRA / skip LoRA
+
+6. Record the selected model name (and optional LoRA) for workflow construction.
 
 ### Step 3: Function Selection
 
@@ -154,7 +168,8 @@ Record the selected e-commerce scene for prompt generation.
    a. Ask for workflow name using AskUserQuestion:
       - Question: "请输入新工作流名称："
    b. Based on the selected function, load the corresponding workflow template from `{skill_dir}/workflows/`:
-      - `txt2img.json` for 文生图
+      - `txt2img.json` for 文生图 (no LoRA)
+      - `txt2img_lora.json` for 文生图 (with LoRA)
       - `img2img.json` for 图生图
       - `inpainting.json` for 局部重绘
       - `controlnet.json` for ControlNet
@@ -222,6 +237,7 @@ Record the selected e-commerce scene for prompt generation.
    - "👁️ 查看图片" - View the image
    - "💾 保存工作流" - Save the workflow
    - "🔄 再生成一张" - Generate another image
+   - "✨ 后处理" - Post-process the image (resize, remove bg, enhance, etc.)
    - "🚪 退出" - Exit
 
 ### E-Commerce Batch Generation (Optional)
@@ -260,3 +276,187 @@ Save the session state to `{comfyui_path}/user/comfyui-assistant-state.json`:
 ```
 
 On next invocation, check for this state file and offer to resume from where the user left off.
+
+---
+
+## Advanced Features
+
+### LoRA Model Management (Step 2 Enhancement)
+
+When the user wants to use LoRA models (in Step 2 or 3), offer LoRA management:
+
+1. **List installed LoRAs:**
+   ```bash
+   python3 {skill_dir}/scripts/lora_manager.py list --comfyui-path {comfyui_path}
+   ```
+
+2. **Show recommended LoRA presets:**
+   ```bash
+   python3 {skill_dir}/scripts/lora_manager.py presets [--type sdxl|sd15|flux] [--tag detail|anime|ecommerce]
+   ```
+
+3. **Search HuggingFace for LoRAs:**
+   ```bash
+   python3 {skill_dir}/scripts/lora_manager.py search "{keyword}" --mirror hf-mirror
+   ```
+
+4. **Download a LoRA:**
+   ```bash
+   python3 {skill_dir}/scripts/lora_manager.py download --repo "{repo_id}" --output "{comfyui_path}/models/loras/" --mirror hf-mirror
+   ```
+
+5. **Install a preset LoRA:**
+   ```bash
+   python3 {skill_dir}/scripts/lora_manager.py install-preset --preset {preset_id} --output "{comfyui_path}/models/loras/" --mirror hf-mirror
+   ```
+
+6. If user selects a LoRA, use the `txt2img_lora.json` workflow template which includes a `LoraLoader` node.
+
+### Model Presets & Recommendations
+
+When the user is unsure which model to use, offer recommendations:
+
+1. **List all presets by category and family:**
+   ```bash
+   python3 {skill_dir}/scripts/model_presets.py list [--category checkpoint|lora|vae|upscale] [--family sdxl|sd15|flux]
+   ```
+
+2. **Show recommended model combos:**
+   ```bash
+   python3 {skill_dir}/scripts/model_presets.py combos [--task ecommerce_product|ecommerce_model|anime|realistic|fast]
+   ```
+
+3. **Get specific recommendation:**
+   ```bash
+   python3 {skill_dir}/scripts/model_presets.py recommend --task {task_type} --family {sdxl|sd15|flux}
+   ```
+
+4. Present recommendations to user with the model combo (checkpoint + LoRA + VAE), showing download commands and recommended settings (steps, cfg, sampler, scheduler).
+
+### Batch Generation (After Step 6)
+
+When the user wants to generate multiple variants:
+
+1. **Offer batch types:**
+   - "📐 多角度展示" - Generate multiple angles (front/side/quarter/top/back/detail)
+   - "🌄 多场景展示" - Same product in different scenes (white_bg/lifestyle/luxury/flatlay)
+   - "🎨 多颜色/款式" - Same product in different colors/styles
+   - "✏️ 自定义变体" - User provides custom variant descriptions
+
+2. **Run batch generation:**
+   ```bash
+   python3 {skill_dir}/scripts/batch_generate.py \
+     --workflow {workflow_path} \
+     --model "{model}" \
+     --subject "{subject}" \
+     --batch-type {angles|scenes|colors|custom} \
+     --variants {variant_keys} \
+     --steps {steps} --cfg {cfg} --width {width} --height {height} \
+     --timeout 600
+   ```
+
+3. **Dry run first** (show plan without submitting):
+   ```bash
+   python3 {skill_dir}/scripts/batch_generate.py ... --dry-run
+   ```
+
+4. Show batch progress and save results to `batch_results.json`.
+
+### Image Post-Processing (After Generation)
+
+When the user wants to post-process generated images:
+
+1. **Check dependencies:**
+   ```bash
+   python3 {skill_dir}/scripts/image_postprocess.py deps
+   ```
+   If Pillow missing: `pip install Pillow`
+   If rembg missing: `pip install rembg` (needed for background removal)
+
+2. **Available operations:**
+   - "🔲 去背景" - Remove background (transparent PNG):
+     ```bash
+     python3 {skill_dir}/scripts/image_postprocess.py remove-bg --input {image} --output {output}
+     ```
+   - "📏 调整尺寸" - Resize for specific platform:
+     ```bash
+     python3 {skill_dir}/scripts/image_postprocess.py resize --input {image} --output {output} --width {w} --height {h}
+     ```
+   - "📐 裁切正方形" - Crop to square (for e-commerce main images):
+     ```bash
+     python3 {skill_dir}/scripts/image_postprocess.py square --input {image} --output {output}
+     ```
+   - "🖼️ 添加边距" - Add padding for aspect ratio (platform-specific):
+     ```bash
+     python3 {skill_dir}/scripts/image_postprocess.py pad --input {image} --output {output} --ratio 1:1 --color white
+     ```
+   - "✨ 增强画质" - Enhance brightness/contrast/saturation/sharpness:
+     ```bash
+     python3 {skill_dir}/scripts/image_postprocess.py enhance --input {image} --output {output} --brightness 1.1 --contrast 1.1 --sharpness 1.2
+     ```
+   - "🔄 格式转换" - Convert format (PNG/JPG/WEBP):
+     ```bash
+     python3 {skill_dir}/scripts/image_postprocess.py convert --input {image} --output {output}.webp --quality 90
+     ```
+   - "📦 批量处理" - Batch process all images in directory:
+     ```bash
+     python3 {skill_dir}/scripts/image_postprocess.py batch --input-dir {dir} --output-dir {dir} --operation {op}
+     ```
+
+3. For e-commerce, offer platform-specific presets:
+   - 淘宝/天猫: 800x800, JPG
+   - 京东: 800x800, JPG
+   - 小红书: 1080x1440, JPG
+   - Amazon: 1000x1000, JPG
+   - Shopify: 2048x2048, PNG
+
+### History Management
+
+Track and manage generation history:
+
+1. **Add current generation to history** (automatically after Step 6):
+   ```bash
+   python3 {skill_dir}/scripts/history_manager.py --db {comfyui_path}/user/history.json add \
+     --model "{model}" --positive "{positive}" --negative "{negative}" \
+     --function "{function}" --prompt-id "{prompt_id}" --images {filenames}
+   ```
+
+2. **List recent generations:**
+   ```bash
+   python3 {skill_dir}/scripts/history_manager.py --db {comfyui_path}/user/history.json list [--limit 20] [--favorites] [--search "{text}"]
+   ```
+
+3. **Show generation details:**
+   ```bash
+   python3 {skill_dir}/scripts/history_manager.py --db {comfyui_path}/user/history.json show {id}
+   ```
+
+4. **Favorite/unfavorite:**
+   ```bash
+   python3 {skill_dir}/scripts/history_manager.py --db {comfyui_path}/user/history.json favorite {id}
+   ```
+
+5. **Rate (1-5 stars):**
+   ```bash
+   python3 {skill_dir}/scripts/history_manager.py --db {comfyui_path}/user/history.json rate {id} {rating}
+   ```
+
+6. **Add tags:**
+   ```bash
+   python3 {skill_dir}/scripts/history_manager.py --db {comfyui_path}/user/history.json tag {id} --add {tags}
+   ```
+
+7. **Compare multiple generations:**
+   ```bash
+   python3 {skill_dir}/scripts/history_manager.py --db {comfyui_path}/user/history.json compare {id1} {id2} {id3}
+   ```
+
+8. **View statistics:**
+   ```bash
+   python3 {skill_dir}/scripts/history_manager.py --db {comfyui_path}/user/history.json stats
+   ```
+
+9. **Export history:**
+   ```bash
+   python3 {skill_dir}/scripts/history_manager.py --db {comfyui_path}/user/history.json export --output history.json --format json
+   ```
