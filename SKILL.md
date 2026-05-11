@@ -91,6 +91,9 @@ You are a ComfyUI Assistant. When this skill is invoked, you must follow the wor
    - Options: select LoRA / skip LoRA
 
 7. Record the selected model name and optional LoRA/VAE/ControlNet for workflow construction.
+   - SD1.5, SD2.x, and SDXL checkpoints use the standard checkpoint workflow family.
+   - For SD3/SD3.5 checkpoints, also ensure the SD3 text encoders are installed under `{comfyui_path}/models/text_encoders/`: `clip_l`, `clip_g`, and `t5xxl`. The dynamic `sd3_txt2img` workflow defaults to `sdv3/clip_l.safetensors`, `sdv3/clip_g.safetensors`, and `sdv3/t5xxl_fp16.safetensors`.
+   - For FLUX, ensure the diffusion model is under `{comfyui_path}/models/diffusion_models/`, text encoders are under `{comfyui_path}/models/text_encoders/`, and the VAE is under `{comfyui_path}/models/vae/`.
 
 ### Step 3: Function Selection
 
@@ -194,6 +197,8 @@ Record the selected e-commerce scene for prompt generation.
       - `lora` if required
       - `input_image` and/or `mask_image` if required
       - `controlnet` if required
+      - `sd3_clip_l`, `sd3_clip_g`, and `sd3_t5xxl` if required
+      - `flux_unet`, `flux_clip_l`, `flux_t5xxl`, and `flux_vae` if required
       - optional settings like `denoise`, `control_strength`, `upscale_width`, `upscale_height` when relevant
    d. Do not build the final workflow until Step 6, after positive/negative prompts are generated.
 
@@ -283,6 +288,8 @@ Record the selected e-commerce scene for prompt generation.
    ```
    Add workflow-specific arguments when needed:
    - LoRA: `--lora "{lora_name}" --lora-strength-model 0.8 --lora-strength-clip 0.8`
+   - SD3/SD3.5: `--sd3-clip-l "{clip_l}" --sd3-clip-g "{clip_g}" --sd3-t5xxl "{t5xxl}"`
+   - FLUX: `--flux-unet "{diffusion_model}" --flux-clip-l "{clip_l}" --flux-t5xxl "{t5xxl}" --flux-vae "{vae}"`
    - Image input: `--input-image "{uploaded_filename}"`
    - Inpainting mask: `--mask-image "{uploaded_mask_filename}"`
    - ControlNet: `--controlnet "{controlnet_model}"`

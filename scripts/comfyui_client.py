@@ -263,7 +263,7 @@ def _collect_clip_text_nodes(workflow, source_node_id, seen=None):
     node = workflow.get(source_node_id)
     if not isinstance(node, dict):
         return set()
-    if node.get("class_type") == "CLIPTextEncode":
+    if node.get("class_type") in ("CLIPTextEncode", "CLIPTextEncodeSD3", "CLIPTextEncodeFlux"):
         return {source_node_id}
 
     found = set()
@@ -277,7 +277,9 @@ def fill_workflow(workflow, model_name, positive_prompt, negative_prompt,
                   seed=None, steps=None, cfg=None, width=None, height=None,
                   sampler=None, scheduler=None, input_image=None,
                   mask_image=None, lora_name=None, lora_strength_model=None,
-                  lora_strength_clip=None, controlnet_model=None, denoise=None):
+                  lora_strength_clip=None, controlnet_model=None, denoise=None,
+                  sd3_clip_l=None, sd3_clip_g=None, sd3_t5xxl=None,
+                  flux_unet=None, flux_clip_l=None, flux_t5xxl=None, flux_vae=None):
     result = json.loads(json.dumps(workflow))
 
     # Build a map of which CLIPTextEncode nodes are positive/negative by
@@ -311,6 +313,46 @@ def fill_workflow(workflow, model_name, positive_prompt, negative_prompt,
                 text == "NEGATIVE_PLACEHOLDER" or node_id in negative_node_ids
             ):
                 inputs["text"] = negative_prompt
+
+        elif class_type == "CLIPTextEncodeSD3":
+            if positive_prompt is not None and node_id in positive_node_ids:
+                inputs["clip_l"] = positive_prompt
+                inputs["clip_g"] = positive_prompt
+                inputs["t5xxl"] = positive_prompt
+            elif negative_prompt is not None and node_id in negative_node_ids:
+                inputs["clip_l"] = negative_prompt
+                inputs["clip_g"] = negative_prompt
+                inputs["t5xxl"] = negative_prompt
+
+        elif class_type == "TripleCLIPLoader":
+            if sd3_clip_l:
+                inputs["clip_name1"] = sd3_clip_l
+            if sd3_clip_g:
+                inputs["clip_name2"] = sd3_clip_g
+            if sd3_t5xxl:
+                inputs["clip_name3"] = sd3_t5xxl
+
+        elif class_type == "CLIPTextEncodeFlux":
+            if positive_prompt is not None and node_id in positive_node_ids:
+                inputs["clip_l"] = positive_prompt
+                inputs["t5xxl"] = positive_prompt
+            elif negative_prompt is not None and node_id in negative_node_ids:
+                inputs["clip_l"] = negative_prompt
+                inputs["t5xxl"] = negative_prompt
+
+        elif class_type == "DualCLIPLoader":
+            if flux_clip_l:
+                inputs["clip_name1"] = flux_clip_l
+            if flux_t5xxl:
+                inputs["clip_name2"] = flux_t5xxl
+
+        elif class_type == "UNETLoader":
+            if flux_unet:
+                inputs["unet_name"] = flux_unet
+
+        elif class_type == "VAELoader":
+            if flux_vae:
+                inputs["vae_name"] = flux_vae
 
         elif class_type == "KSampler":
             if seed is not None:
@@ -381,6 +423,13 @@ def main():
     submit_parser.add_argument("--lora-strength-model", type=float, help="LoRA model strength")
     submit_parser.add_argument("--lora-strength-clip", type=float, help="LoRA CLIP strength")
     submit_parser.add_argument("--controlnet", help="ControlNet model name")
+    submit_parser.add_argument("--sd3-clip-l", help="SD3/SD3.5 CLIP-L filename")
+    submit_parser.add_argument("--sd3-clip-g", help="SD3/SD3.5 CLIP-G filename")
+    submit_parser.add_argument("--sd3-t5xxl", help="SD3/SD3.5 T5 XXL filename")
+    submit_parser.add_argument("--flux-unet", help="FLUX diffusion model filename")
+    submit_parser.add_argument("--flux-clip-l", help="FLUX CLIP-L filename")
+    submit_parser.add_argument("--flux-t5xxl", help="FLUX T5 XXL filename")
+    submit_parser.add_argument("--flux-vae", help="FLUX VAE filename")
     submit_parser.add_argument("--wait", action="store_true", help="Wait for completion")
     submit_parser.add_argument("--timeout", type=int, default=600, help="Wait timeout in seconds")
 
@@ -430,6 +479,13 @@ def main():
             lora_strength_clip=args.lora_strength_clip,
             controlnet_model=args.controlnet,
             denoise=args.denoise,
+            sd3_clip_l=args.sd3_clip_l,
+            sd3_clip_g=args.sd3_clip_g,
+            sd3_t5xxl=args.sd3_t5xxl,
+            flux_unet=args.flux_unet,
+            flux_clip_l=args.flux_clip_l,
+            flux_t5xxl=args.flux_t5xxl,
+            flux_vae=args.flux_vae,
         )
 
         placeholders = find_placeholders(workflow)

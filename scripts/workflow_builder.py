@@ -33,11 +33,20 @@ KNOWN_REQUIRED_INPUTS = {
     "CheckpointLoaderSimple": ["ckpt_name"],
     "LoraLoader": ["lora_name", "strength_model", "strength_clip", "model", "clip"],
     "CLIPTextEncode": ["text", "clip"],
+    "TripleCLIPLoader": ["clip_name1", "clip_name2", "clip_name3"],
+    "DualCLIPLoader": ["clip_name1", "clip_name2", "type"],
+    "CLIPTextEncodeSD3": ["clip", "clip_l", "clip_g", "t5xxl", "empty_padding"],
+    "CLIPTextEncodeFlux": ["clip", "clip_l", "t5xxl", "guidance"],
     "EmptyLatentImage": ["width", "height", "batch_size"],
+    "EmptySD3LatentImage": ["width", "height", "batch_size"],
     "KSampler": [
         "seed", "steps", "cfg", "sampler_name", "scheduler", "denoise",
         "model", "positive", "negative", "latent_image",
     ],
+    "ModelSamplingSD3": ["model", "shift"],
+    "ModelSamplingFlux": ["model", "max_shift", "base_shift", "width", "height"],
+    "UNETLoader": ["unet_name", "weight_dtype"],
+    "VAELoader": ["vae_name"],
     "VAEDecode": ["samples", "vae"],
     "VAEEncode": ["pixels", "vae"],
     "SaveImage": ["filename_prefix", "images"],
@@ -105,6 +114,19 @@ class BuildParams:
         self.filename_prefix = kwargs.get("filename_prefix") or "ComfyUI"
         self.upscale_width = kwargs.get("upscale_width")
         self.upscale_height = kwargs.get("upscale_height")
+        self.sd3_clip_l = kwargs.get("sd3_clip_l") or "sdv3/clip_l.safetensors"
+        self.sd3_clip_g = kwargs.get("sd3_clip_g") or "sdv3/clip_g.safetensors"
+        self.sd3_t5xxl = kwargs.get("sd3_t5xxl") or "sdv3/t5xxl_fp16.safetensors"
+        self.sd3_shift = kwargs.get("sd3_shift", 3.0)
+        self.sd3_empty_padding = kwargs.get("sd3_empty_padding") or "empty_prompt"
+        self.flux_unet = kwargs.get("flux_unet") or kwargs.get("model") or "FLUX_MODEL_PLACEHOLDER"
+        self.flux_clip_l = kwargs.get("flux_clip_l") or "clip_l.safetensors"
+        self.flux_t5xxl = kwargs.get("flux_t5xxl") or "t5xxl_fp16.safetensors"
+        self.flux_vae = kwargs.get("flux_vae") or "ae.safetensors"
+        self.flux_weight_dtype = kwargs.get("flux_weight_dtype") or "default"
+        self.flux_guidance = kwargs.get("flux_guidance", 3.5)
+        self.flux_max_shift = kwargs.get("flux_max_shift", 1.15)
+        self.flux_base_shift = kwargs.get("flux_base_shift", 0.5)
 
 
 # ---------------------------------------------------------------------------
@@ -132,11 +154,83 @@ def clip_text(graph, text, clip_ref):
     return graph.add("CLIPTextEncode", {"text": text, "clip": clip_ref})
 
 
+def triple_clip_loader(graph, clip_l, clip_g, t5xxl):
+    # ComfyUI's SD3 recipe expects clip-l, clip-g, then T5.
+    return graph.add("TripleCLIPLoader", {
+        "clip_name1": clip_l,
+        "clip_name2": clip_g,
+        "clip_name3": t5xxl,
+    })
+
+
+def dual_clip_loader(graph, clip_l, t5xxl, clip_type="flux"):
+    return graph.add("DualCLIPLoader", {
+        "clip_name1": clip_l,
+        "clip_name2": t5xxl,
+        "type": clip_type,
+    })
+
+
+def clip_text_sd3(graph, text, clip_ref, empty_padding="empty_prompt"):
+    return graph.add("CLIPTextEncodeSD3", {
+        "clip": clip_ref,
+        "clip_l": text,
+        "clip_g": text,
+        "t5xxl": text,
+        "empty_padding": empty_padding,
+    })
+
+
+def clip_text_flux(graph, text, clip_ref, guidance=3.5):
+    return graph.add("CLIPTextEncodeFlux", {
+        "clip": clip_ref,
+        "clip_l": text,
+        "t5xxl": text,
+        "guidance": guidance,
+    })
+
+
 def empty_latent(graph, width, height, batch_size=1):
     return graph.add("EmptyLatentImage", {
         "width": width,
         "height": height,
         "batch_size": batch_size,
+    })
+
+
+def empty_sd3_latent(graph, width, height, batch_size=1):
+    return graph.add("EmptySD3LatentImage", {
+        "width": width,
+        "height": height,
+        "batch_size": batch_size,
+    })
+
+
+def model_sampling_sd3(graph, model_ref, shift=3.0):
+    return graph.add("ModelSamplingSD3", {
+        "model": model_ref,
+        "shift": shift,
+    })
+
+
+def unet_loader(graph, unet_name, weight_dtype="default"):
+    return graph.add("UNETLoader", {
+        "unet_name": unet_name,
+        "weight_dtype": weight_dtype,
+    })
+
+
+def vae_loader(graph, vae_name):
+    return graph.add("VAELoader", {"vae_name": vae_name})
+
+
+def model_sampling_flux(graph, model_ref, width, height, max_shift=1.15, base_shift=0.5):
+    return graph.add("ModelSamplingFlux", {
+        "model": model_ref,
+        "max_shift": max_shift,
+        "base_shift": base_shift,
+        "width": width,
+        "height": height,
     })
 
 
@@ -354,9 +448,53 @@ def build_latent_upscale(params, use_lora=False, prefix=None):
     return graph.export()
 
 
+def build_sd3_txt2img(params, prefix=None):
+    graph = WorkflowGraph()
+    model_ref, _checkpoint_clip_ref, vae_ref = checkpoint_loader(graph, params.model)
+    sd3_model = model_sampling_sd3(graph, model_ref, params.sd3_shift)
+    clip_node = triple_clip_loader(graph, params.sd3_clip_l, params.sd3_clip_g, params.sd3_t5xxl)
+    positive_node = clip_text_sd3(graph, params.positive, link(clip_node), params.sd3_empty_padding)
+    negative_node = clip_text_sd3(graph, params.negative, link(clip_node), params.sd3_empty_padding)
+    latent = empty_sd3_latent(graph, params.width, params.height, params.batch_size)
+    sampled = ksampler(graph, link(sd3_model), link(positive_node), link(negative_node), link(latent), params)
+    decoded = vae_decode(graph, link(sampled), vae_ref)
+    save_image(graph, link(decoded), prefix or params.filename_prefix)
+    return graph.export()
+
+
+def build_flux_txt2img(params, prefix=None):
+    graph = WorkflowGraph()
+    model = unet_loader(graph, params.flux_unet, params.flux_weight_dtype)
+    flux_model = model_sampling_flux(
+        graph,
+        link(model),
+        params.width,
+        params.height,
+        params.flux_max_shift,
+        params.flux_base_shift,
+    )
+    clip_node = dual_clip_loader(graph, params.flux_clip_l, params.flux_t5xxl, "flux")
+    positive_node = clip_text_flux(graph, params.positive, link(clip_node), params.flux_guidance)
+    negative_node = clip_text_flux(graph, params.negative, link(clip_node), params.flux_guidance)
+    latent = empty_latent(graph, params.width, params.height, params.batch_size)
+    sampled = ksampler(graph, link(flux_model), link(positive_node), link(negative_node), link(latent), params)
+    vae = vae_loader(graph, params.flux_vae)
+    decoded = vae_decode(graph, link(sampled), link(vae))
+    save_image(graph, link(decoded), prefix or params.filename_prefix)
+    return graph.export()
+
+
 def _workflow_builder(name):
     builders = {
         "txt2img": lambda p: build_txt2img(p, prefix="ComfyUI_txt2img"),
+        "sd3_txt2img": lambda p: build_sd3_txt2img(
+            _with_sd3_defaults(p),
+            prefix="ComfyUI_sd3_txt2img",
+        ),
+        "flux_txt2img": lambda p: build_flux_txt2img(
+            _with_flux_defaults(p),
+            prefix="ComfyUI_flux_txt2img",
+        ),
         "txt2img_lora": lambda p: build_txt2img(p, use_lora=True, prefix="ComfyUI_txt2img_lora"),
         "img2img": lambda p: build_img2img(p, prefix="ComfyUI_img2img"),
         "img2img_lora": lambda p: build_img2img(p, use_lora=True, prefix="ComfyUI_img2img_lora"),
@@ -387,21 +525,61 @@ def _with_dimensions(params, width, height):
     return clone
 
 
+def _with_sd3_defaults(params):
+    clone = BuildParams(**params.__dict__)
+    if clone.sampler == "euler_ancestral":
+        clone.sampler = "dpmpp_2m"
+    if clone.scheduler == "normal":
+        clone.scheduler = "sgm_uniform"
+    return clone
+
+
+def _with_flux_defaults(params):
+    clone = BuildParams(**params.__dict__)
+    if clone.sampler == "euler_ancestral":
+        clone.sampler = "euler"
+    if clone.scheduler == "normal":
+        clone.scheduler = "simple"
+    if clone.cfg == 7.0:
+        clone.cfg = 1.0
+    if clone.negative == "NEGATIVE_PLACEHOLDER":
+        clone.negative = ""
+    return clone
+
+
 WORKFLOW_BLUEPRINTS = {
     "txt2img": {
         "tier": "basic",
         "label": "基础文生图",
         "description": "Checkpoint + prompt + latent + KSampler + decode",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["all"],
         "requires": ["model", "positive", "negative"],
         "optional": [],
+    },
+    "sd3_txt2img": {
+        "tier": "basic",
+        "label": "SD3/SD3.5 文生图",
+        "description": "Checkpoint + TripleCLIPLoader + CLIPTextEncodeSD3 + EmptySD3LatentImage",
+        "families": ["sd3", "sd35"],
+        "image_types": ["all"],
+        "requires": ["model", "positive", "negative", "sd3_clip_l", "sd3_clip_g", "sd3_t5xxl"],
+        "optional": ["sd3_shift"],
+    },
+    "flux_txt2img": {
+        "tier": "basic",
+        "label": "FLUX 文生图",
+        "description": "UNETLoader + DualCLIPLoader + CLIPTextEncodeFlux + VAELoader",
+        "families": ["flux"],
+        "image_types": ["all"],
+        "requires": ["flux_unet", "positive", "negative", "flux_clip_l", "flux_t5xxl", "flux_vae"],
+        "optional": ["flux_guidance", "flux_weight_dtype", "flux_max_shift", "flux_base_shift"],
     },
     "txt2img_lora": {
         "tier": "basic",
         "label": "文生图 + LoRA",
         "description": "基础文生图并插入 LoraLoader",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["all"],
         "requires": ["model", "positive", "negative", "lora"],
         "optional": [],
@@ -410,7 +588,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "image",
         "label": "图生图",
         "description": "LoadImage + VAEEncode + KSampler",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["all"],
         "requires": ["model", "positive", "negative", "input_image"],
         "optional": ["denoise"],
@@ -419,7 +597,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "image",
         "label": "图生图 + LoRA",
         "description": "图生图并插入 LoraLoader",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["all"],
         "requires": ["model", "positive", "negative", "input_image", "lora"],
         "optional": ["denoise"],
@@ -428,7 +606,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "image",
         "label": "局部重绘",
         "description": "LoadImage + LoadImageMask + SetLatentNoiseMask",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["realistic", "portrait", "ecommerce_product", "architecture", "all"],
         "requires": ["model", "positive", "negative", "input_image", "mask_image"],
         "optional": ["denoise"],
@@ -437,7 +615,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "image",
         "label": "局部重绘 + LoRA",
         "description": "局部重绘并插入 LoraLoader",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["realistic", "portrait", "ecommerce_product", "architecture", "all"],
         "requires": ["model", "positive", "negative", "input_image", "mask_image", "lora"],
         "optional": ["denoise"],
@@ -446,7 +624,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "control",
         "label": "ControlNet 文生图",
         "description": "ControlNetApply 接入正向 conditioning",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["anime", "landscape", "architecture", "ecommerce_product", "portrait", "all"],
         "requires": ["model", "positive", "negative", "input_image", "controlnet"],
         "optional": ["control_strength"],
@@ -455,7 +633,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "control",
         "label": "ControlNet 图生图",
         "description": "图生图并使用输入图作为 ControlNet 参考",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["realistic", "portrait", "architecture", "ecommerce_product", "all"],
         "requires": ["model", "positive", "negative", "input_image", "controlnet"],
         "optional": ["denoise", "control_strength"],
@@ -464,7 +642,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "control",
         "label": "ControlNet 局部重绘",
         "description": "局部重绘叠加 ControlNet 结构控制",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["realistic", "portrait", "architecture", "ecommerce_product", "all"],
         "requires": ["model", "positive", "negative", "input_image", "mask_image", "controlnet"],
         "optional": ["denoise", "control_strength"],
@@ -473,7 +651,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "advanced",
         "label": "两阶段高清修复",
         "description": "第一轮采样后 latent upscale，再低 denoise 二次采样",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["all"],
         "requires": ["model", "positive", "negative"],
         "optional": ["upscale_width", "upscale_height", "refiner_denoise"],
@@ -482,7 +660,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "advanced",
         "label": "两阶段高清修复 + LoRA",
         "description": "高清修复并插入 LoraLoader",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["all"],
         "requires": ["model", "positive", "negative", "lora"],
         "optional": ["upscale_width", "upscale_height", "refiner_denoise"],
@@ -491,7 +669,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "advanced",
         "label": "潜空间放大重采样",
         "description": "输入图编码到 latent 后放大并重采样",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["all"],
         "requires": ["model", "positive", "negative", "input_image"],
         "optional": ["upscale_width", "upscale_height", "denoise"],
@@ -500,7 +678,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "ecommerce",
         "label": "电商商品图",
         "description": "商品图文生图，默认插入 LoRA 节点指针",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["ecommerce_product"],
         "requires": ["model", "positive", "negative", "lora"],
         "optional": [],
@@ -509,7 +687,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "ecommerce",
         "label": "电商模特图",
         "description": "输入模特图进行图生图编辑",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["portrait", "ecommerce_model"],
         "requires": ["model", "positive", "negative", "input_image", "lora"],
         "optional": ["denoise"],
@@ -518,7 +696,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "ecommerce",
         "label": "电商换背景",
         "description": "基于商品图进行背景替换/重绘",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["ecommerce_product"],
         "requires": ["model", "positive", "negative", "input_image", "lora"],
         "optional": ["denoise"],
@@ -527,7 +705,7 @@ WORKFLOW_BLUEPRINTS = {
         "tier": "ecommerce",
         "label": "虚拟试穿 ControlNet",
         "description": "竖图尺寸 + ControlNet 姿态/结构控制",
-        "families": ["sdxl", "sd15"],
+        "families": ["sd", "sd15", "sd2", "sdxl"],
         "image_types": ["portrait", "ecommerce_model"],
         "requires": ["model", "positive", "negative", "input_image", "controlnet"],
         "optional": ["control_strength"],
@@ -553,6 +731,12 @@ def infer_model_family(model_name=None, explicit_family=None):
     name = model_name.lower()
     if "flux" in name:
         return "flux"
+    if any(term in name for term in ("sd3.5", "sd35", "stable-diffusion-3.5")):
+        return "sd35"
+    if any(term in name for term in ("sd3", "sd_3", "stable-diffusion-3")):
+        return "sd3"
+    if any(term in name for term in ("sd2", "sd2.1", "sd_2", "2.1", "v2-1", "768-v")):
+        return "sd2"
     sd15_terms = [
         "sd15", "sd1.5", "1_5", "v1-5", "anything", "counterfeit",
         "meina", "revanimated", "rev_animated", "dreamshaper_8",
@@ -562,6 +746,8 @@ def infer_model_family(model_name=None, explicit_family=None):
     sdxl_terms = ["xl", "sdxl", "pony", "juggernaut", "realvisxl", "animagine"]
     if any(term in name for term in sdxl_terms):
         return "sdxl"
+    if any(term in name for term in ("stable-diffusion", "sd_", "sd-")):
+        return "sd"
     return "sdxl"
 
 
@@ -594,7 +780,11 @@ def build_menu(model_family="sdxl", image_type=None, model_name=None):
     unsupported = []
     if family == "flux":
         unsupported.append(
-            "当前动态构建器只生成 CheckpointLoaderSimple 系列工作流；标准 FLUX 工作流需要单独的 UNET/CLIP/VAE 节点链。"
+            "FLUX 工作流需要独立 diffusion model、clip_l、t5xxl 和 VAE 文件。缺少这些文件时请先放入 ComfyUI/models/diffusion_models、models/text_encoders 和 models/vae。"
+        )
+    elif family in ("sd3", "sd35"):
+        unsupported.append(
+            "SD3/SD3.5 工作流需要独立 text encoders：clip_l、clip_g、t5xxl。缺少这些文件时请先放入 ComfyUI/models/text_encoders。"
         )
 
     return {
@@ -766,6 +956,19 @@ def params_from_args(args):
         filename_prefix=args.filename_prefix,
         upscale_width=args.upscale_width,
         upscale_height=args.upscale_height,
+        sd3_clip_l=args.sd3_clip_l,
+        sd3_clip_g=args.sd3_clip_g,
+        sd3_t5xxl=args.sd3_t5xxl,
+        sd3_shift=args.sd3_shift,
+        sd3_empty_padding=args.sd3_empty_padding,
+        flux_unet=args.flux_unet,
+        flux_clip_l=args.flux_clip_l,
+        flux_t5xxl=args.flux_t5xxl,
+        flux_vae=args.flux_vae,
+        flux_weight_dtype=args.flux_weight_dtype,
+        flux_guidance=args.flux_guidance,
+        flux_max_shift=args.flux_max_shift,
+        flux_base_shift=args.flux_base_shift,
     )
 
 
@@ -793,6 +996,32 @@ def add_build_args(parser):
     parser.add_argument("--filename-prefix", default="ComfyUI")
     parser.add_argument("--upscale-width", type=int)
     parser.add_argument("--upscale-height", type=int)
+    parser.add_argument("--sd3-clip-l", default="sdv3/clip_l.safetensors",
+                        help="SD3/SD3.5 CLIP-L filename under ComfyUI models/text_encoders")
+    parser.add_argument("--sd3-clip-g", default="sdv3/clip_g.safetensors",
+                        help="SD3/SD3.5 CLIP-G filename under ComfyUI models/text_encoders")
+    parser.add_argument("--sd3-t5xxl", default="sdv3/t5xxl_fp16.safetensors",
+                        help="SD3/SD3.5 T5 XXL filename under ComfyUI models/text_encoders")
+    parser.add_argument("--sd3-shift", type=float, default=3.0,
+                        help="Shift value for ModelSamplingSD3")
+    parser.add_argument("--sd3-empty-padding", default="empty_prompt", choices=["none", "empty_prompt"],
+                        help="Empty padding mode for CLIPTextEncodeSD3")
+    parser.add_argument("--flux-unet", help="FLUX diffusion model filename under ComfyUI models/diffusion_models")
+    parser.add_argument("--flux-clip-l", default="clip_l.safetensors",
+                        help="FLUX CLIP-L filename under ComfyUI models/text_encoders")
+    parser.add_argument("--flux-t5xxl", default="t5xxl_fp16.safetensors",
+                        help="FLUX T5 XXL filename under ComfyUI models/text_encoders")
+    parser.add_argument("--flux-vae", default="ae.safetensors",
+                        help="FLUX VAE filename under ComfyUI models/vae")
+    parser.add_argument("--flux-weight-dtype", default="default",
+                        choices=["default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"],
+                        help="Weight dtype for UNETLoader")
+    parser.add_argument("--flux-guidance", type=float, default=3.5,
+                        help="Guidance value for CLIPTextEncodeFlux")
+    parser.add_argument("--flux-max-shift", type=float, default=1.15,
+                        help="Max shift for ModelSamplingFlux")
+    parser.add_argument("--flux-base-shift", type=float, default=0.5,
+                        help="Base shift for ModelSamplingFlux")
 
 
 def main():
@@ -800,7 +1029,7 @@ def main():
     subparsers = parser.add_subparsers(dest="command")
 
     menu_parser = subparsers.add_parser("menu", help="Show model-aware TUI workflow menu")
-    menu_parser.add_argument("--model-family", default="auto", choices=["auto", "sdxl", "sd15", "flux"])
+    menu_parser.add_argument("--model-family", default="auto", choices=["auto", "sd", "sd15", "sd2", "sdxl", "sd3", "sd35", "flux"])
     menu_parser.add_argument("--model", help="Selected checkpoint name for family inference")
     menu_parser.add_argument("--image-type", help="Selected image type")
     menu_parser.add_argument("--json", action="store_true", dest="json_output")

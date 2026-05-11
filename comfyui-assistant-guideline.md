@@ -139,13 +139,13 @@ python3 {skill_dir}/scripts/workflow_builder.py menu \
 ```
 
 The response is grouped into tiers:
-- `basic`: txt2img, txt2img + LoRA
+- `basic`: txt2img, txt2img + LoRA, SD3/SD3.5 txt2img, FLUX txt2img
 - `image`: img2img, inpainting
 - `control`: ControlNet variants
 - `advanced`: high-res fix and latent upscale
 - `ecommerce`: product/model/background/try-on workflows
 
-Only show workflows returned by the menu. This prevents SD1.5/SDXL/FLUX incompatible options from appearing in the TUI.
+Only show workflows returned by the menu. This prevents SD1.5/SD2.x/SDXL/SD3/SD3.5/FLUX incompatible options from appearing in the TUI. SD3/SD3.5 workflows require separate text encoders (`clip_l`, `clip_g`, `t5xxl`) under ComfyUI's `models/text_encoders`. FLUX workflows require a diffusion model, CLIP-L, T5XXL, and VAE in their matching ComfyUI model folders.
 
 **Build final workflow JSON after prompts are known:**
 ```bash
@@ -156,6 +156,16 @@ python3 {skill_dir}/scripts/workflow_builder.py build \
   --negative "{negative}" \
   --output "{comfyui_path}/user/workflows/{name}.json" \
   {workflow_specific_args}
+```
+
+For SD3/SD3.5 dynamic workflows, pass text encoder filenames when they differ from defaults:
+```bash
+--sd3-clip-l "sdv3/clip_l.safetensors" --sd3-clip-g "sdv3/clip_g.safetensors" --sd3-t5xxl "sdv3/t5xxl_fp16.safetensors"
+```
+
+For FLUX dynamic workflows, pass the split model component filenames:
+```bash
+--flux-unet "flux1-dev.safetensors" --flux-clip-l "clip_l.safetensors" --flux-t5xxl "t5xxl_fp16.safetensors" --flux-vae "ae.safetensors"
 ```
 
 **Validate any generated or static workflow:**
