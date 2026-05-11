@@ -126,6 +126,45 @@ ComfyUI workflows use a node-based JSON format. Each node has:
 | `LatentUpscale` | Upscale latent image | `samples`, `upscale_method`, `width`, `height`, `crop` |
 | `ImageScale` | Scale image | `image`, `upscale_method`, `width`, `height`, `crop` |
 
+### Dynamic Workflow Builder
+
+Prefer dynamic workflows for new generation sessions. The builder stores reusable node pointers and workflow blueprints in code, then assembles JSON at runtime.
+
+**Model-aware menu for TUI:**
+```bash
+python3 {skill_dir}/scripts/workflow_builder.py menu \
+  --model "{checkpoint_name}" \
+  --image-type "{image_type}" \
+  --json
+```
+
+The response is grouped into tiers:
+- `basic`: txt2img, txt2img + LoRA
+- `image`: img2img, inpainting
+- `control`: ControlNet variants
+- `advanced`: high-res fix and latent upscale
+- `ecommerce`: product/model/background/try-on workflows
+
+Only show workflows returned by the menu. This prevents SD1.5/SDXL/FLUX incompatible options from appearing in the TUI.
+
+**Build final workflow JSON after prompts are known:**
+```bash
+python3 {skill_dir}/scripts/workflow_builder.py build \
+  --workflow-id "{workflow_id}" \
+  --model "{checkpoint_name}" \
+  --positive "{positive}" \
+  --negative "{negative}" \
+  --output "{comfyui_path}/user/workflows/{name}.json" \
+  {workflow_specific_args}
+```
+
+**Validate any generated or static workflow:**
+```bash
+python3 {skill_dir}/scripts/workflow_builder.py validate --workflow "{workflow_path}"
+```
+
+Use `--allow-placeholders` only for template inspection. Before submitting to ComfyUI, validation should pass without unresolved placeholders.
+
 ### Recommended Sampler Settings
 
 | Style | Sampler | Scheduler | Steps | CFG |

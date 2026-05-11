@@ -161,20 +161,44 @@ Record the selected e-commerce scene for prompt generation.
    ls -1t {comfyui_path}/user/workflows/*.json 2>/dev/null | head -10
    ```
 
-2. Use **AskUserQuestion** for workflow selection (max 4 options):
-   - Always show: "➕ 新建基础工作流"
-   - If previous workflows exist, show up to 3 most recent + "➕ 新建基础工作流"
-   - If no previous workflows: only show "➕ 新建基础工作流"
+2. Build a model-aware dynamic workflow menu from node pointers:
+   ```bash
+   python3 {skill_dir}/scripts/workflow_builder.py menu \
+     --model "{model}" \
+     --image-type "{image_type}" \
+     --json
+   ```
+   - Render the returned `tiers` as hierarchical TUI pages: 基础生成 / 图像输入 / 结构控制 / 高级工作流 / 电商工作流.
+   - Only show workflows returned by this command; model-family incompatible workflows must stay hidden.
+   - If `unsupported_notes` is non-empty, show the note and offer static/manual workflow fallback.
 
-3. If user selects a previous workflow:
+3. Use **AskUserQuestion** for workflow selection (max 4 options per page):
+   - First select tier, then select a workflow from that tier.
+   - Also offer "📂 使用已保存工作流" if previous workflows exist.
+   - Also offer "🧩 静态模板兼容模式" for fallback.
+
+4. If user selects a previous workflow:
    - Load the workflow JSON
+   - Validate it:
+     ```bash
+     python3 {skill_dir}/scripts/workflow_builder.py validate --workflow {workflow_path} --allow-placeholders
+     ```
    - Display its configuration to the user
    - Ask if they want to modify it
 
-4. If user selects "➕ 新建基础工作流":
+5. If user selects a dynamic workflow:
    a. Ask for workflow name using AskUserQuestion:
       - Question: "请输入新工作流名称："
-   b. Based on the selected function, load the corresponding workflow template from `{skill_dir}/workflows/`:
+   b. Record the selected `workflow_id` and its `requires` / `optional` fields.
+   c. Collect non-prompt requirements now:
+      - `lora` if required
+      - `input_image` and/or `mask_image` if required
+      - `controlnet` if required
+      - optional settings like `denoise`, `control_strength`, `upscale_width`, `upscale_height` when relevant
+   d. Do not build the final workflow until Step 6, after positive/negative prompts are generated.
+
+6. If user selects "🧩 静态模板兼容模式":
+   a. Based on the selected function, load the corresponding workflow template from `{skill_dir}/workflows/`:
       - `txt2img.json` for 文生图 (no LoRA)
       - `txt2img_lora.json` for 文生图 (with LoRA)
       - `img2img.json` for 图生图
@@ -185,10 +209,10 @@ Record the selected e-commerce scene for prompt generation.
       - `ecommerce_model.json` for 电商模特图
       - `ecommerce_bg_replace.json` for 电商换背景
       - `ecommerce_tryon.json` for 虚拟试穿
-   c. Fill in the selected model name into the template
-   d. Save the workflow to `{comfyui_path}/user/workflows/{name}.json`
+   b. Fill in the selected model name into the template
+   c. Save the workflow to `{comfyui_path}/user/workflows/{name}.json`
 
-5. If user needs to provide an input image (for img2img, inpainting, ControlNet, e-commerce bg_replace, tryon):
+7. If user needs to provide an input image (for img2img, inpainting, ControlNet, e-commerce bg_replace, tryon):
    - Ask the user to provide the image path
    - Validate the image exists
    - Upload to ComfyUI's input directory:
@@ -236,8 +260,24 @@ Record the selected e-commerce scene for prompt generation.
 
 ### Step 6: Submit and Generate
 
-1. Fill the prompts into the workflow JSON
-2. Submit the workflow to ComfyUI API:
+1. If a dynamic workflow was selected, build final JSON from node pointers now:
+   ```bash
+   python3 {skill_dir}/scripts/workflow_builder.py build \
+     --workflow-id "{workflow_id}" \
+     --model "{model}" \
+     --positive "{positive}" \
+     --negative "{negative}" \
+     --output "{comfyui_path}/user/workflows/{name}.json" \
+     {workflow_specific_args}
+   ```
+   Then validate it:
+   ```bash
+   python3 {skill_dir}/scripts/workflow_builder.py validate --workflow "{comfyui_path}/user/workflows/{name}.json"
+   ```
+
+2. If a static or saved workflow was selected, fill the prompts into the workflow JSON.
+
+3. Submit the workflow to ComfyUI API:
    ```bash
    python3 {skill_dir}/scripts/comfyui_client.py submit --workflow {workflow_path} --model "{model}" --positive "{positive}" --negative "{negative}" --wait --timeout 600
    ```
@@ -246,9 +286,9 @@ Record the selected e-commerce scene for prompt generation.
    - Image input: `--input-image "{uploaded_filename}"`
    - Inpainting mask: `--mask-image "{uploaded_mask_filename}"`
    - ControlNet: `--controlnet "{controlnet_model}"`
-3. Monitor the generation progress (the --wait flag handles this automatically)
-4. Once complete, report the output image path to the user.
-5. Ask if the user wants to (max 4 options):
+4. Monitor the generation progress (the --wait flag handles this automatically)
+5. Once complete, report the output image path to the user.
+6. Ask if the user wants to (max 4 options):
    - "👁️ 查看图片" - View the image
    - "💾 保存工作流" - Save the workflow
    - "🔄 再生成一张" - Generate another image
